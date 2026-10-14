@@ -1,0 +1,57 @@
+#!/bin/bash
+# gpu-switch — 把 $PREFIX 的 OpenCL 换成厂商高通驱动（带备份，随时还原）
+#
+#   gpu-switch opencl on      把 $PREFIX/lib/libOpenCL.so 换成厂商驱动
+#                             —— 任何链 -lOpenCL 的程序零改动直接用上骁龙 GPU
+#   gpu-switch opencl off     还原成 ocl-icd（原文件备份在 libOpenCL.so.ocl-icd）
+#   gpu-switch opencl status  看当前是哪个
+#
+# 注意：这一招会**改动 $PREFIX 里的文件**（有备份、可还原）。只想临时用一下，
+# 用 `gpu-run --opencl <程序>` —— 它走 LD_LIBRARY_PATH，一个字节都不动。
+set -e
+
+self="$(readlink -f "$0" 2>/dev/null || echo "$0")"
+PREFIX="${CCODROID_PREFIX:-${PREFIX:-}}"
+[ -n "$PREFIX" ] || PREFIX="$(cd "$(dirname "$self")/.." && pwd)"
+LDIR="$PREFIX/lib/gpu-driver"
+DATA="${CCODROID_GPU_DATA:-$HOME/.cccodroid/gpu-driver}"
+LIB="$PREFIX/lib/libOpenCL.so"
+BAK="$PREFIX/lib/libOpenCL.so.ocl-icd"
+
+[ "${1:-}" = "opencl" ] || { sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+
+# 厂商驱动的来源：手动安装目录 → 运行期数据目录 → 设备上的原文件
+VENDOR=""
+for c in "$LDIR/vendor/libOpenCL.so" "$DATA/opencl/libOpenCL.so" /vendor/lib64/libOpenCL.so; do
+  [ -f "$c" ] && VENDOR="$c" && break
+done
+
+case "${2:-status}" in
+  on)
+    [ -n "$VENDOR" ] || { echo "找不到厂商 libOpenCL.so" >&2; exit 1; }
+    if [ "$VENDOR" != "$DATA/opencl/libOpenCL.so" ]; then
+      mkdir -p "$DATA/opencl"
+      cp -f "$VENDOR" "$DATA/opencl/libOpenCL.so"
+      VENDOR="$DATA/opencl/libOpenCL.so"
+    fi
+    if [ ! -e "$BAK" ]; then cp -p "$LIB" "$BAK"; echo "已备份 ocl-icd -> $BAK"; fi
+    cp -f "$VENDOR" "$LIB"
+    ln -sf libOpenCL.so "$PREFIX/lib/libOpenCL.so.1"
+    echo "OpenCL: 厂商高通驱动（on）"
+    ;;
+  off)
+    [ -e "$BAK" ] || { echo "没有备份 $BAK，无法还原" >&2; exit 1; }
+    cp -f "$BAK" "$LIB"
+    rm -f "$PREFIX/lib/libOpenCL.so.1"
+    echo "OpenCL: ocl-icd（off）"
+    ;;
+  status)
+    if [ -n "$VENDOR" ] && [ -f "$LIB" ] && cmp -s "$LIB" "$VENDOR"; then
+      echo "OpenCL: 厂商高通驱动（on）"
+    else
+      echo "OpenCL: ocl-icd（off）"
+    fi
+    ;;
+  *)
+    echo "用法: gpu-switch opencl on|off|status" >&2; exit 2 ;;
+esac

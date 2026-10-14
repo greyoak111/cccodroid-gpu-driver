@@ -1,0 +1,113 @@
+#!/bin/bash
+# gpu-info — 自检：这个环境现在能用哪些 GPU 栈（cccodroid 的 gpu-driver 组件）
+#
+# 退出码：0 = Turnip（组件核心）可用；1 = 不可用。
+# 渲染自测 PASS/FAIL 看最后一行。
+set +e
+
+self="$(readlink -f "$0" 2>/dev/null || echo "$0")"
+PREFIX="${CCODROID_PREFIX:-${PREFIX:-}}"
+[ -n "$PREFIX" ] || PREFIX="$(cd "$(dirname "$self")/.." && pwd)"
+
+CDIR="$PREFIX/share/cccodroid/components/gpu-driver"       # 市场组件目录
+LDIR="$PREFIX/lib/gpu-driver"                             # 手动安装（install.sh）目录
+DATA="${CCODROID_GPU_DATA:-$HOME/.cccodroid/gpu-driver}"
+
+ICD=""
+for c in "$PREFIX/share/vulkan/icd.d/freedreno_icd.aarch64.json" "$LDIR/icd/freedreno_icd.json"; do
+  [ -f "$c" ] && ICD="$c" && break
+done
+P=""
+for c in "$CDIR/lib/probe.py" "$LDIR/lib/probe.py" "$(dirname "$self")/../lib/probe.py"; do
+  [ -f "$c" ] && P="$c" && break
+done
+[ -n "$P" ] || { echo "gpu-info: 找不到 probe.py（市场组件在 $CDIR/lib/，手动版在 $LDIR/lib/）" >&2; exit 1; }
+
+HAL=""
+for d in "$DATA/hal" "$LDIR/hal"; do
+  [ -f "$d/vulkan.adreno.so" ] && [ -f "$d/gpu_bootstrap.so" ] && HAL="$d" && break
+done
+
+turnip_ok=0; zink_ok=0; render_ok=0; opencl_ok=0
+
+echo "===== GPU ====="
+if [ -r /sys/class/kgsl/kgsl-3d0/gpu_model ]; then
+  printf 'model      : %s\n' "$(cat /sys/class/kgsl/kgsl-3d0/gpu_model)"
+else
+  echo "model      : (读不到 kgsl——本组件只对高通 Adreno 有效)"
+fi
+ls -l /dev/kgsl-3d0 2>&1 | sed 's/^/kgsl node  : /'
+printf 'prefix     : %s\n' "$PREFIX"
+
+echo
+echo "===== 厂商 Vulkan（系统 loader，默认驱动）====="
+python3 "$P" vk-sys 2>&1
+
+echo
+echo "===== Turnip（开源驱动，gpu-run 默认）====="
+if [ -n "$ICD" ]; then
+  out="$(python3 "$P" vk-icd "$ICD" 2>&1)"; rc=$?
+  printf '%s\n' "$out"
+  [ "$rc" = 0 ] && turnip_ok=1
+else
+  echo "(找不到 Turnip 的 ICD json —— 组件包不完整，重装 gpu-driver)"
+fi
+
+echo
+echo "===== zink（OpenGL / GLES on Turnip）====="
+if [ "$turnip_ok" = 1 ]; then
+  out="$(GALLIUM_DRIVER=zink MESA_LOADER_DRIVER_OVERRIDE=zink EGL_PLATFORM=surfaceless \
+         VK_DRIVER_FILES="$ICD" python3 "$P" mesa-egl 2>&1)"; rc=$?
+  printf '%s\n' "$out"
+  case "$out" in *GL_RENDERER:*) zink_ok=1 ;; esac
+else
+  echo "(跳过：Turnip 不可用)"
+fi
+
+echo
+echo "===== 渲染自测（建 FBO、清屏、读回像素）====="
+if [ "$zink_ok" = 1 ]; then
+  out="$(GALLIUM_DRIVER=zink MESA_LOADER_DRIVER_OVERRIDE=zink EGL_PLATFORM=surfaceless \
+         VK_DRIVER_FILES="$ICD" python3 "$P" render 2>&1)"; rc=$?
+  printf '%s\n' "${out##*$'\n'}"
+  [ "$rc" = 0 ] && render_ok=1
+else
+  echo "(跳过：zink 不可用)"
+fi
+
+echo
+echo "===== 厂商 GLES（系统 EGL/GLESv2）====="
+python3 "$P" egl-sys 2>&1
+
+echo
+echo "===== OpenCL ====="
+if [ -f "$DATA/opencl/libOpenCL.so" ]; then
+  echo "(已取用厂商驱动：$DATA/opencl/libOpenCL.so)"
+  out="$(python3 "$P" opencl "$DATA/opencl/libOpenCL.so" 2>&1)"; rc=$?
+  printf '%s\n' "$out"
+  [ "$rc" = 0 ] && opencl_ok=1
+else
+  echo "(未取用。跑 gpu-run --opencl <程序> 会自动从设备取厂商 libOpenCL.so，"
+  echo " 不覆盖 $PREFIX 里的任何文件)"
+  if [ -f "$PREFIX/lib/libOpenCL.so" ]; then
+    echo "-- 现在 $PREFIX/lib/libOpenCL.so 的行为（ocl-icd 认不了高通驱动，属正常）："
+    python3 "$P" opencl 2>&1 | sed 's/^/   /'
+  fi
+fi
+
+echo
+echo "===== HAL 通道载荷（可选）====="
+if [ -n "$HAL" ]; then
+  echo "已装：$HAL（gpu-run -m hal 可用）"
+else
+  echo "未装（可选，不影响上面的功能）"
+fi
+
+echo
+printf '===== 总结 ===== Turnip=%s zink=%s render=%s opencl=%s\n' \
+  "$([ "$turnip_ok" = 1 ] && echo OK || echo 不可用)" \
+  "$([ "$zink_ok" = 1 ] && echo OK || echo 不可用)" \
+  "$([ "$render_ok" = 1 ] && echo PASS || echo -)" \
+  "$([ "$opencl_ok" = 1 ] && echo PASS || echo -)"
+[ "$turnip_ok" = 1 ] || exit 1
+exit 0

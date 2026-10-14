@@ -1,0 +1,4 @@
+# 下载/生成物，不进仓库（二进制由 install.sh --fetch / --hal-zip 现取）
+payload/
+.sandbox/
+out/

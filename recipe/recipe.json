@@ -1,0 +1,24 @@
+{
+  "schema": 1,
+  "id": "gpu-driver",
+  "kind": "termux",
+  "revision": 1,
+  "name": { "zh": "GPU 驱动（高通 Adreno）", "en": "GPU driver (Qualcomm Adreno)" },
+  "desc": {
+    "zh": "让命令行程序用上本机 Adreno GPU：开源的 Turnip Vulkan 1.4 驱动 + Mesa zink（OpenGL/GLES），免 root、进程级生效，不动系统分区。可跑 Vulkan 计算与渲染（llama.cpp、vkmark 之类）、离屏 OpenGL（无显示服务器），并让 OpenCL 程序用上厂商驱动。",
+    "en": "Puts the on-device Adreno GPU to work from the command line: the open-source Turnip Vulkan 1.4 driver plus Mesa zink for OpenGL/GLES. No root, per-process only, nothing on the system partition is touched. Runs Vulkan compute and rendering (llama.cpp, vkmark, …), offscreen OpenGL without a display server, and lets OpenCL programs use the vendor driver."
+  },
+  "roots": ["mesa-vulkan-icd-freedreno", "mesa", "vulkan-tools"],
+  "bin": ["gpu-run", "gpu-info"],
+  "selftest": "gpu-info",
+  "needs": { "shizuku": false, "display": false, "gpu": true },
+  "license": "MIT",
+  "homepage": "https://mesa3d.org",
+  "maintainers": ["greyoak111"],
+  "files": {
+    "usr/bin/gpu-run": { "src": "bin/gpu-run", "mode": "755" },
+    "usr/bin/gpu-info": { "src": "bin/gpu-info", "mode": "755" },
+    "usr/share/cccodroid/components/gpu-driver/lib/probe.py": { "src": "lib/probe.py", "mode": "644" }
+  },
+  "notes": "只对高通 Adreno 有意义（依赖 /dev/kgsl-3d0，本组件走 KGSL 后端，不用 /dev/dri）。厂商驱动只有 Vulkan 1.1（且不认 VK_DRIVER_FILES），所以默认用 Turnip。Mesa 是 zink（GL）需要的，会带进 libllvm（解包约 165MB）；不需要 GL 的话体积主要在这里。"
+}

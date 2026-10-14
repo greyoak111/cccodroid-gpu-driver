@@ -1,0 +1,115 @@
+#!/bin/bash
+# gpu-run — 用 Adreno GPU 跑一个命令行程序（cccodroid 的 gpu-driver 组件）
+#
+#   gpu-run [选项] [--] <程序> [参数...]
+#
+#   （默认）       Turnip：开源 Vulkan 1.4 驱动（VK_DRIVER_FILES 指向组件自带的 ICD）
+#   -z, --zink     OpenGL / GLES 走 Mesa zink（GL→Vulkan 转译），配合 --surfaceless 可离屏渲染
+#   --surfaceless  设 EGL_PLATFORM=surfaceless（没有显示服务器的命令行渲染）
+#   --opencl       用厂商高通 OpenCL：把 /vendor/lib64/libOpenCL.so 拷进组件数据目录，
+#                  用 LD_LIBRARY_PATH 抢先用它 —— 不改动 $PREFIX 里的任何文件
+#   --vendor       不注入任何东西，用系统自带的厂商驱动（Vulkan 1.1 / GLES）
+#   -m hal         HAL 通道（可选载荷，默认没有；见组件目录下的说明）
+#
+# 环境变量：
+#   CCODROID_GPU_DATA  运行期数据目录（着色器缓存、厂商库拷贝；默认 ~/.cccodroid/gpu-driver）
+#   CCODROID_TU_DEBUG  Turnip 调试开关（默认 sysmem＝关 tiling，a7xx/a8xx 更稳；设空串则不设）
+#
+# 例：
+#   gpu-run vkmark                 # Vulkan 跑分
+#   gpu-run -z --surfaceless glmark2-es2 --off-screen
+#   gpu-run --opencl clinfo
+set -e
+
+self="$(readlink -f "$0" 2>/dev/null || echo "$0")"
+PREFIX="${CCODROID_PREFIX:-${PREFIX:-}}"
+[ -n "$PREFIX" ] || PREFIX="$(cd "$(dirname "$self")/.." && pwd)"
+
+CDIR="$PREFIX/share/cccodroid/components/gpu-driver"      # 市场组件目录
+LDIR="$PREFIX/lib/gpu-driver"                            # 手动安装（install.sh）目录
+DATA="${CCODROID_GPU_DATA:-$HOME/.cccodroid/gpu-driver}"  # 运行期数据
+
+# 两种安装布局都认：市场组件装的 ICD / 手动装的 ICD
+ICD=""
+for c in "$PREFIX/share/vulkan/icd.d/freedreno_icd.aarch64.json" "$LDIR/icd/freedreno_icd.json"; do
+  [ -f "$c" ] && ICD="$c" && break
+done
+
+MODE=icd
+ZINK=0
+SURFACELESS=0
+OPENCL=0
+
+usage() { sed -n '2,23p' "$0" | sed 's/^#\{1,2\} \{0,1\}//'; exit "${1:-0}"; }
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -z|--zink) ZINK=1; shift ;;
+    --surfaceless) SURFACELESS=1; shift ;;
+    --opencl) OPENCL=1; shift ;;
+    --vendor) MODE=vendor; shift ;;
+    -m|--mode) MODE="${2:?-m 需要参数}"; shift 2 ;;
+    -h|--help) usage 0 ;;
+    --) shift; break ;;
+    -*) echo "未知选项: $1" >&2; usage 2 ;;
+    *) break ;;
+  esac
+done
+[ $# -gt 0 ] || usage 2
+
+case "$MODE" in
+  icd)
+    [ -n "$ICD" ] || { echo "gpu-run: 找不到 Turnip 的 ICD json（市场组件装 $PREFIX/share/vulkan/icd.d/，手动版装 $LDIR/icd/）" >&2; exit 1; }
+    export VK_DRIVER_FILES="$ICD" VK_ICD_FILENAMES="$ICD"
+    ;;
+  hal)
+    # HAL 通道（系统 loader + GraphicsEnv 垫片）的载荷不随市场组件分发；装了载荷才可用
+    HAL=""
+    for d in "$DATA/hal" "$LDIR/hal"; do
+      [ -f "$d/vulkan.adreno.so" ] && [ -f "$d/gpu_bootstrap.so" ] && HAL="$d" && break
+    done
+    [ -n "$HAL" ] || { echo "gpu-run: HAL 通道缺载荷（可选：手动版 ./install.sh --hal-zip 装到 $LDIR/hal，或自己放到 $DATA/hal）" >&2; exit 1; }
+    export LD_PRELOAD="$HAL/gpu_bootstrap.so${LD_PRELOAD:+:$LD_PRELOAD}"
+    export CCODROID_GPU_DRIVER_DIR="$HAL"
+    [ "$ZINK" = 1 ] && [ -f "$HAL/loader_shim/libvulkan.so.1" ] && \
+      export LD_LIBRARY_PATH="$HAL/loader_shim${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    ;;
+  vendor) ;;
+  *) echo "未知模式: $MODE" >&2; exit 2 ;;
+esac
+
+if [ "$ZINK" = 1 ]; then
+  # GALLIUM_DRIVER 是 Termux Mesa 认的那个；MESA_LOADER_DRIVER_OVERRIDE 给别的构建
+  # —— 单设后者会静默退回 llvmpipe，两个都设（实测无副作用）
+  export GALLIUM_DRIVER=zink MESA_LOADER_DRIVER_OVERRIDE=zink
+  if ! ls "$PREFIX"/lib/libgallium-*.so >/dev/null 2>&1; then
+    echo "gpu-run: 提示：$PREFIX/lib 下没有 libgallium（Mesa），-z 可能起不来（重装 gpu-driver）" >&2
+  fi
+  export MESA_SHADER_CACHE_DIR="${MESA_SHADER_CACHE_DIR:-$DATA/cache/shader}"
+  mkdir -p "$MESA_SHADER_CACHE_DIR" 2>/dev/null || true
+fi
+[ "$SURFACELESS" = 1 ] && export EGL_PLATFORM=surfaceless
+
+if [ "$OPENCL" = 1 ]; then
+  OCL="$DATA/opencl"
+  mkdir -p "$OCL"
+  if [ ! -f "$OCL/libOpenCL.so" ]; then
+    src=""
+    for c in /vendor/lib64/libOpenCL.so /vendor/lib/libOpenCL.so; do
+      [ -r "$c" ] && src="$c" && break
+    done
+    [ -n "$src" ] || { echo "gpu-run: 设备上没有可读的厂商 libOpenCL.so" >&2; exit 1; }
+    cp "$src" "$OCL/libOpenCL.so"
+    ln -sf libOpenCL.so "$OCL/libOpenCL.so.1"   # 链了 -lOpenCL.so.1 的程序也认
+    echo "gpu-run: 已取用厂商 OpenCL -> $OCL/libOpenCL.so" >&2
+  fi
+  export LD_LIBRARY_PATH="$OCL${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+fi
+
+if [ -z "${CCODROID_TU_DEBUG+x}" ]; then
+  export TU_DEBUG=sysmem          # a7xx/a8xx 上关 tiling，稳定性优先
+elif [ -n "$CCODROID_TU_DEBUG" ]; then
+  export TU_DEBUG="$CCODROID_TU_DEBUG"
+fi
+
+exec "$@"
