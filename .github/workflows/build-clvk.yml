@@ -10,8 +10,9 @@ name: build-clvk
 
 on:
   workflow_dispatch:
+  # 打 clvk-build-* 标签 → 构建并发布成 clvk-<日期>（发布标签不再触发构建，免得循环重建）
   push:
-    tags: ["clvk-*"]
+    tags: ["clvk-build-*"]
 
 permissions:
   contents: write
@@ -90,12 +91,15 @@ jobs:
           path: out/
           if-no-files-found: error
 
-      - name: 发布（打 tag 时）
-        if: startsWith(github.ref, 'refs/tags/clvk-')
+      - name: 发布（打 clvk-build-* 标签时；发成 clvk-<日期>）
+        if: startsWith(github.ref, 'refs/tags/clvk-build-')
         run: |
-          gh release create "$GITHUB_REF_NAME" out/libOpenCL.so out/clspv out/SHA256SUMS \
-            --title "clvk (glibc / Linux arm64) $GITHUB_REF_NAME" \
+          REL="clvk-${GITHUB_REF_NAME#clvk-build-}"
+          gh release create "$REL" out/libOpenCL.so out/clspv out/SHA256SUMS \
+            --target "$GITHUB_SHA" \
+            --title "clvk (glibc / Linux arm64) ${REL#clvk-}" \
             --notes "clvk（OpenCL over Vulkan）的 glibc 版，给 Android 上的 Linux arm64 程序用。
-          自包含：clspv + libclc 都内嵌在 libOpenCL.so 里，运行时只需要一个 Vulkan 实现（例如 Turnip）。"
+          自包含：clspv + libclc 都内嵌在 libOpenCL.so 里，运行时只需要一个 Vulkan 实现（例如 Turnip）。
+          用 glibc/install-clvk.sh 装：它按 SHA256SUMS 核对后再放进 \$PREFIX/glibc/。"
         env:
           GH_TOKEN: ${{ github.token }}

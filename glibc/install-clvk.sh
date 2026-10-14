@@ -5,7 +5,7 @@
 #
 #   clvk 由本仓库的 CI 构建（.github/workflows/build-clvk.yml），不含在这里：
 #     产物 libOpenCL.so（自包含：clspv + libclc 都在里面）+ clspv 命令行 + SHA256SUMS
-#   默认取最新 Release；下载后**核对 Release 里的 SHA256SUMS**，再装到：
+#   默认取最新的 clvk-* Release；下载后**核对 Release 里的 SHA256SUMS**，再装到：
 #     $PREFIX/glibc/lib/libOpenCL.so（+ .so.1 软链）
 #     $PREFIX/glibc/bin/clspv
 #     $PREFIX/glibc/etc/OpenCL/vendors/clvk.icd
@@ -38,7 +38,8 @@ trap 'rm -rf "$WORK"' EXIT
 if [ -n "$FROM" ]; then
   cp -f "$FROM"/libOpenCL.so "$FROM"/clspv "$FROM"/SHA256SUMS "$WORK/" 2>/dev/null || true
 else
-  [ -n "$VER" ] || VER="$(gh release view -R "$REPO" --json tagName --jq .tagName 2>/dev/null | head -1)"
+  [ -n "$VER" ] || VER="$(gh release list -R "$REPO" --limit 30 --json tagName \
+      --jq '[.[].tagName | select(startswith("clvk-"))] | first // ""' 2>/dev/null)"
   [ -n "$VER" ] || { echo "拿不到 Release 版本（没网？没有 Release？）" >&2; exit 1; }
   echo "版本：$VER"
   for f in libOpenCL.so clspv SHA256SUMS; do
