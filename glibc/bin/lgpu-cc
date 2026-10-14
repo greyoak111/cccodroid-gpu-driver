@@ -1,0 +1,86 @@
+#!/bin/bash
+# lgpu-cc — 用本机 clang 编 aarch64-linux-gnu（glibc）程序
+#
+#   lgpu-cc hello.c -o hello            # 编出来直接就能跑
+#   lgpu-cc -O2 -c foo.cpp              # C++ 自动换 clang++
+#   lgpu-cc --setup                     # 只补齐工具链碎片（从 Termux 官方 glibc 仓库取）
+#   lgpu-cc --show hello.c              # 只打印最终命令，不执行
+#
+# 为什么能编：本机 clang 本身是 bionic 的，但交叉到 glibc 只差三样东西 ——
+#   glibc 自己的 crt1.o/crti.o/crtn.o + libc.so 链接脚本（base 的 glibc 包里就有），
+#   GCC 运行时的 crtbegin*/crtend*/libgcc.a/libgcc_eh.a/libgcc_s.so（在 gcc-glibc 包里，
+#   就是 libgcc-14-dev 的那几件），
+#   以及一个指向 $PREFIX/glibc/lib/ld-linux-aarch64.so.1 的动态链接器。
+# 前两样由 --setup 从 Termux 官方仓库取（核对 SHA256，只要那几百 KB）。
+#
+# 编出来的程序自带正确的解释器路径，**直接执行**即可；要跑 GPU 就套 lgpu-run。
+set -e
+
+self="$(readlink -f "$0" 2>/dev/null || echo "$0")"
+PREFIX="${CCODROID_PREFIX:-${PREFIX:-}}"
+[ -n "$PREFIX" ] || PREFIX="$(cd "$(dirname "$self")/.." && pwd)"
+GROOT="${CCODROID_GLIBC_ROOT:-$PREFIX/glibc}"
+DATA="${CCODROID_GPU_DATA:-$HOME/.cccodroid/gpu-driver}"
+TC="$DATA/toolchain"
+CDIR="$PREFIX/share/cccodroid/components/gpu-driver-glibc"
+
+usage() { sed -n '2,19p' "$0" | sed 's/^#\{1,2\} \{0,1\}//'; exit "${1:-0}"; }
+
+# 找组件里带的取料脚本（市场布局 / 手动布局都认）
+FETCH=""
+for c in "$CDIR/lib/fetch-glibc-toolchain.py" "$PREFIX/lib/gpu-driver-glibc/lib/fetch-glibc-toolchain.py" \
+         "$(dirname "$self")/../lib/fetch-glibc-toolchain.py"; do
+  [ -f "$c" ] && FETCH="$c" && break
+done
+
+# gemu 目录：含 libgcc.a 的那个（布局随 GCC 版本变，别写死）
+gccdir() { find "$TC/gcc" -maxdepth 3 -name libgcc.a 2>/dev/null | head -1 | xargs -r dirname; }
+
+need_setup() {
+  local d; d="$(gccdir)"
+  [ -n "$d" ] && [ -f "$TC/lib/libgcc_s.so.1" ] && [ -f "$d/crtbeginS.o" ] && [ -f "$d/crtendS.o" ] && return 1
+  return 0
+}
+
+setup() {
+  [ -n "$FETCH" ] || { echo "lgpu-cc: 找不到 fetch-glibc-toolchain.py（组件没装全）" >&2; exit 1; }
+  echo "lgpu-cc: 取 GCC 的 crt/libgcc 那几件（Termux 官方 glibc 仓库，核对 SHA256）…" >&2
+  python3 "$FETCH" "$TC"
+}
+
+case "${1:-}" in
+  -h|--help) usage 0 ;;
+  --setup) setup; exit 0 ;;
+esac
+[ $# -gt 0 ] || usage 2
+if need_setup; then setup; fi
+
+GCCDIR="$(gccdir)"
+[ -n "$GCCDIR" ] || { echo "lgpu-cc: 工具链碎片不齐（跑 lgpu-cc --setup）" >&2; exit 1; }
+[ -x "$GROOT/lib/ld-linux-aarch64.so.1" ] || { echo "lgpu-cc: 缺 $GROOT/lib/ld-linux-aarch64.so.1（glibc 根不对？）" >&2; exit 1; }
+
+CC=clang
+SHOW="${CCODROID_LGPU_CC_SHOW:-0}"
+[ "${1:-}" = "--show" ] && { SHOW=1; shift; }
+for a in "$@"; do
+  case "$a" in
+    *.cc|*.cpp|*.cxx|*.c++|*.C) CC=clang++ ;;
+  esac
+done
+command -v "$CC" >/dev/null || { echo "lgpu-cc: 找不到 $CC" >&2; exit 1; }
+
+# --sysroot 给编译器看头文件和库；--sysroot=/ 给**链接器**（否则链接脚本里的绝对路径会被再拼一次）
+set -- "$CC" \
+  --target=aarch64-linux-gnu \
+  --sysroot="$GROOT" \
+  -B"$GCCDIR" -L"$GCCDIR" -L"$TC/lib" \
+  -fuse-ld=lld \
+  -Wl,--sysroot=/ \
+  -Wl,--dynamic-linker="$GROOT/lib/ld-linux-aarch64.so.1" \
+  "$@"
+
+if [ "$SHOW" = 1 ]; then
+  printf '%q ' "$@"; echo
+  exit 0
+fi
+exec "$@"

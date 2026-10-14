@@ -1,0 +1,89 @@
+#!/bin/bash
+# lgpu-info — glibc（Linux arm64）侧自检：这台设备的 GPU 能不能给 glibc 程序用
+#
+# 退出码：0 = Turnip 可用（组件核心）；1 = 不可用。
+set +e
+
+self="$(readlink -f "$0" 2>/dev/null || echo "$0")"
+PREFIX="${CCODROID_PREFIX:-${PREFIX:-}}"
+[ -n "$PREFIX" ] || PREFIX="$(cd "$(dirname "$self")/.." && pwd)"
+GROOT="${CCODROID_GLIBC_ROOT:-$PREFIX/glibc}"
+LD="$GROOT/lib/ld-linux-aarch64.so.1"
+DATA="${CCODROID_GPU_DATA:-$HOME/.cccodroid/gpu-driver}"
+
+turnip_ok=0; gl_ok=0
+
+echo "===== GPU ====="
+if [ -r /sys/class/kgsl/kgsl-3d0/gpu_model ]; then
+  printf 'model      : %s\n' "$(cat /sys/class/kgsl/kgsl-3d0/gpu_model)"
+else
+  echo "model      : (读不到 kgsl——只对高通 Adreno 有效)"
+fi
+ls -l /dev/kgsl-3d0 2>&1 | sed 's/^/kgsl node  : /'
+
+echo
+echo "===== glibc 运行时 ====="
+if [ -x "$LD" ]; then
+  echo "ld-linux   : $("$LD" --version 2>&1 | head -1)"
+  ls -l "$GROOT/lib/libc.so.6" 2>&1 | sed 's/^/libc       : /'
+else
+  echo "(缺 $LD —— glibc 根不对？设 CCODROID_GLIBC_ROOT)"
+fi
+
+echo
+echo "===== Turnip（glibc 侧，lgpu-run 默认）====="
+VKINFO="$GROOT/bin/vulkaninfo"
+LGRUN="$(dirname "$self")/lgpu-run"
+if [ -x "$VKINFO" ] && [ -x "$LD" ] && [ -x "$LGRUN" ]; then
+  out="$(CCODROID_GLIBC_ROOT="$GROOT" "$LGRUN" "$VKINFO" --summary 2>&1)"
+  printf '%s\n' "$out" | sed -n '/^GPU0:/,/^$/p' | head -12
+  case "$out" in
+    *"turnip"*|*"Turnip"*) turnip_ok=1 ;;
+  esac
+  if [ "$turnip_ok" != 1 ]; then
+    echo "(vulkaninfo 没报出 Turnip，末尾几行：)"
+    printf '%s\n' "$out" | tail -5 | sed 's/^/   /'
+  fi
+else
+  echo "(缺 $VKINFO —— 组件包不完整，重装 gpu-driver-glibc)"
+fi
+
+echo
+echo "===== OpenGL / zink（可选）====="
+JSON=""
+for c in "${__EGL_VENDOR_LIBRARY_FILENAMES:-}" \
+         "$GROOT/share/glvnd/egl_vendor.d/50_mesa.json" \
+         "$DATA/mesa-gl/usr/share/glvnd/egl_vendor.d/50_mesa.json"; do
+  [ -n "$c" ] && [ -f "$c" ] && JSON="$c" && break
+done
+GALLIUM=""
+for c in "$GROOT"/lib/libgallium-*.so "$DATA"/mesa-gl/usr/lib/aarch64-linux-gnu/libgallium-*.so; do
+  [ -f "$c" ] && GALLIUM="$c" && break
+done
+if [ -n "$JSON" ] && [ -n "$GALLIUM" ]; then
+  gl_ok=1
+  echo "Mesa 就位：$(basename "$GALLIUM")"
+  echo "EGL vendor：$JSON"
+  echo "（用 lgpu-run -z <程序> 让它走 zink；没装 Mesa 时用你现有的 glibc Mesa，"
+  echo "  例如 blender-cli-android 的 debroot）"
+else
+  echo "没有 glibc 版 Mesa（zink 需要它）："
+  [ -n "$GALLIUM" ] || echo "  - 缺 libgallium-*.so"
+  [ -n "$JSON" ] || echo "  - 缺 glvnd 的 50_mesa.json"
+  echo "  Turnip（Vulkan）不受影响；要 GPU 跑 OpenGL，装一个 glibc Mesa 即可"
+fi
+
+echo
+echo "===== clvk（OpenCL over Vulkan，可选）====="
+if [ -f "$GROOT/lib/libOpenCL.so" ] || [ -f "$GROOT/lib/libOpenCL.so.1" ]; then
+  echo "已装：$GROOT/lib/libOpenCL.so*"
+else
+  echo "未装（glibc 程序用不了厂商的 bionic libOpenCL.so，OpenCL 得走 clvk）"
+fi
+
+echo
+printf '===== 总结 ===== Turnip=%s zink-Mesa=%s\n' \
+  "$([ "$turnip_ok" = 1 ] && echo OK || echo 不可用)" \
+  "$([ "$gl_ok" = 1 ] && echo 就位 || echo 未就位)"
+[ "$turnip_ok" = 1 ] || exit 1
+exit 0

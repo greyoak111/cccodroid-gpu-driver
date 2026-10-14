@@ -1,0 +1,141 @@
+#!/bin/bash
+# lgpu-run — 用 Adreno GPU 跑 glibc（Linux arm64）程序（cccodroid 的 gpu-driver-glibc 组件）
+#
+#   lgpu-run [选项] [--] <程序> [参数...]
+#
+#   （默认）      Vulkan：VK_ICD_FILENAMES 指向 glibc 侧的 Turnip ICD
+#   -z, --zink    OpenGL / GLES：zink（需要 glibc 版的 Mesa，见下）
+#   -L <目录>     追加库搜索目录（Debian debroot 之类；可重复，等价于 CCODROID_LGPU_LIBS）
+#   --icd <json>  用别的 Vulkan ICD（例如你自己那份更新版 Mesa 的 freedreno_icd.json）
+#   --vendor      不注入 ICD，用系统/厂商默认
+#   --direct      直接 exec（默认经 ld-linux --library-path 启动，能跑解释器不是本机路径的二进制）
+#
+# 环境变量：
+#   CCODROID_GLIBC_ROOT  glibc 根（默认 $PREFIX/glibc，里面有 lib/ld-linux-aarch64.so.1）
+#   CCODROID_LGPU_LIBS   额外的库目录（冒号分隔）
+#   CCODROID_GPU_DATA    运行期数据目录（默认 ~/.cccodroid/gpu-driver）
+#   CCODROID_TU_DEBUG    Turnip 调试开关（默认 sysmem＝关 tiling，a7xx/a8xx 更稳）
+#
+# ⚠️ 库路径里**绝不能出现 bionic 的目录**（$PREFIX/lib 之类）：那是 Termux 的
+#    bionic 库，符号版本是 LIBC/LIBC_N，混进去会满屏 `version 'LIBC' not found`。
+#    本脚本只放 glibc 的目录。
+set -e
+
+self="$(readlink -f "$0" 2>/dev/null || echo "$0")"
+PREFIX="${CCODROID_PREFIX:-${PREFIX:-}}"
+[ -n "$PREFIX" ] || PREFIX="$(cd "$(dirname "$self")/.." && pwd)"
+
+GROOT="${CCODROID_GLIBC_ROOT:-$PREFIX/glibc}"
+LD="$GROOT/lib/ld-linux-aarch64.so.1"
+DATA="${CCODROID_GPU_DATA:-$HOME/.cccodroid/gpu-driver}"
+CDIR="$PREFIX/share/cccodroid/components/gpu-driver-glibc"
+
+ZINK=0
+VENDOR=0
+DIRECT=0
+EXTRA="${CCODROID_LGPU_LIBS:-}"
+ICD_OPT=""
+
+usage() { sed -n '2,21p' "$0" | sed 's/^#\{1,2\} \{0,1\}//'; exit "${1:-0}"; }
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -z|--zink) ZINK=1; shift ;;
+    -L) EXTRA="$EXTRA${EXTRA:+:}${2:?-L 需要参数}"; shift 2 ;;
+    --icd) ICD_OPT="${2:?--icd 需要参数}"; shift 2 ;;
+    --vendor) VENDOR=1; shift ;;
+    --direct) DIRECT=1; shift ;;
+    -h|--help) usage 0 ;;
+    --) shift; break ;;
+    -*) echo "未知选项: $1" >&2; usage 2 ;;
+    *) break ;;
+  esac
+done
+[ $# -gt 0 ] || usage 2
+
+[ -x "$LD" ] || { echo "lgpu-run: 找不到 $LD（glibc 根不对？看 CCODROID_GLIBC_ROOT）" >&2; exit 1; }
+
+# ── 摘掉 bionic 的 LD_PRELOAD ───────────────────────────────────────
+# cccodroid 的 shell 给每个进程挂了 termux-exec 的垫片（bionic）。glibc 的 ld.so
+# 会跨 libc 边界继承 LD_PRELOAD，然后按 glibc 的名字去解析它的依赖
+# （NEEDED libc.so → 撞上 /glibc/lib/libc.so 这个链接脚本）：
+#   error while loading shared libraries: .../glibc/lib/libc.so: invalid ELF header
+# 报错看着像 glibc 装坏了，其实只是这个垫片。见 blender-cli-android 的 pitfalls #20。
+if [ -n "${LD_PRELOAD:-}" ]; then
+  echo "lgpu-run: 已摘掉继承来的 LD_PRELOAD（bionic 垫片，glibc 程序不能带）：$LD_PRELOAD" >&2
+  unset LD_PRELOAD
+fi
+[ -n "${CCODROID_LGPU_PRELOAD:-}" ] && export LD_PRELOAD="$CCODROID_LGPU_PRELOAD"
+
+# ── Vulkan：Turnip 的 ICD（glibc 侧）─────────────────────────────────
+# 优先级：--icd 指定 > 环境里已有的 VK_ICD_FILENAMES > 组件自带的那份
+ICD_SRC="${ICD_OPT:-${VK_ICD_FILENAMES:-${VK_DRIVER_FILES:-$GROOT/share/vulkan/icd.d/freedreno_icd.aarch64.json}}}"
+ICD="$ICD_SRC"
+if [ "$VENDOR" = 0 ] && [ -f "$ICD_SRC" ]; then
+  # 包里写的是绝对路径；对不上（换过根目录）就现场生成一份指对路径的
+  icd_lib="$(sed -n 's/.*"library_path"[^"]*"\([^"]*\)".*/\1/p' "$ICD_SRC" | head -1)"
+  if [ -n "$icd_lib" ] && [ ! -f "$icd_lib" ]; then
+    mkdir -p "$DATA/icd"
+    ICD="$DATA/icd/freedreno_icd.glibc.json"
+    python3 - "$ICD_SRC" "$ICD" "$GROOT/lib/libvulkan_freedreno.so" <<'PYEOF'
+import json, sys
+src, dst, lib = sys.argv[1:4]
+d = json.load(open(src))
+d.setdefault("ICD", {})["library_path"] = lib
+json.dump(d, open(dst, "w"), indent=2)
+PYEOF
+  fi
+  export VK_ICD_FILENAMES="$ICD" VK_DRIVER_FILES="$ICD"
+fi
+
+# ── OpenGL：zink（可选，需要 glibc 版 Mesa）──────────────────────────
+if [ "$ZINK" = 1 ]; then
+  export GALLIUM_DRIVER=zink MESA_LOADER_DRIVER_OVERRIDE=zink
+  export EGL_PLATFORM="${EGL_PLATFORM:-surfaceless}"
+  export MESA_SHADER_CACHE_DIR="${MESA_SHADER_CACHE_DIR:-$DATA/cache/shader-glibc}"
+  mkdir -p "$MESA_SHADER_CACHE_DIR" 2>/dev/null || true
+  # libglvnd 靠它找 Mesa 的 EGL 实现；缺了只会看到误导性的 EGL_BAD_PARAMETER
+  if [ -z "${__EGL_VENDOR_LIBRARY_FILENAMES:-}" ]; then
+    for c in "$GROOT/share/glvnd/egl_vendor.d/50_mesa.json" \
+             "$GROOT/share/egl/egl_external_platform.d/50_mesa.json"; do
+      [ -f "$c" ] && { export __EGL_VENDOR_LIBRARY_FILENAMES="$c"; break; }
+    done
+  fi
+  if [ -z "${__EGL_VENDOR_LIBRARY_FILENAMES:-}" ]; then
+    echo "lgpu-run: 提示：没找到 Mesa 的 EGL vendor json —— 没有 glibc 版 Mesa 就起不来（-z 需要它）" >&2
+  fi
+fi
+
+if [ -z "${CCODROID_TU_DEBUG+x}" ]; then
+  export TU_DEBUG=sysmem
+elif [ -n "$CCODROID_TU_DEBUG" ]; then
+  export TU_DEBUG="$CCODROID_TU_DEBUG"
+fi
+
+# ── 程序名解析 ──────────────────────────────────────────────────────
+# 不带斜杠就先把 glibc 的 bin 找一遍（bionic 的 PATH 里没有它们）
+case "$1" in
+  */*) ;;
+  *)
+    if [ -x "$GROOT/bin/$1" ]; then
+      set -- "$GROOT/bin/$1" "${@:2}"
+    elif p="$(command -v -- "$1" 2>/dev/null)"; then
+      set -- "$p" "${@:2}"
+    else
+      echo "lgpu-run: 找不到命令 $1（glibc 的 bin 里没有，PATH 里也没有；给绝对路径试试）" >&2
+      exit 127
+    fi
+    ;;
+esac
+
+# ── 库路径：只有 glibc ──────────────────────────────────────────────
+LIBP="$GROOT/lib"
+[ -n "$EXTRA" ] && LIBP="$LIBP:$EXTRA"
+[ -n "${CCODROID_LGPU_PREPEND:-}" ] && LIBP="$CCODROID_LGPU_PREPEND:$LIBP"
+
+if [ "$DIRECT" = 1 ]; then
+  exec "$@"
+else
+  # 经 ld-linux 启动：解释器写成 /lib/ld-linux-aarch64.so.1 的发行版二进制也能跑
+  exec "$LD" --library-path "$LIBP" "$@"
+fi

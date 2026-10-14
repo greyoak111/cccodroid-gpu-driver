@@ -1,0 +1,25 @@
+{
+  "schema": 1,
+  "id": "gpu-driver-glibc",
+  "kind": "glibc",
+  "revision": 1,
+  "name": { "zh": "GPU 驱动（glibc / Linux arm64）", "en": "GPU driver (glibc / Linux arm64)" },
+  "desc": {
+    "zh": "让 glibc（Linux arm64）程序用上本机 Adreno GPU：glibc 侧的 Turnip Vulkan 1.4 + 命令行包装器 lgpu-run（拼对 glibc 运行时与 ICD，经 ld-linux 启动）。给 Debian 包、Blender 这类 glibc 程序用；OpenGL 走 zink（需自备 glibc 版 Mesa），OpenCL 走 clvk。",
+    "en": "Puts the on-device Adreno GPU to work from glibc (Linux arm64) programs: a glibc-side Turnip Vulkan 1.4 plus the lgpu-run wrapper, which wires up the glibc runtime, the ICD and launches through ld-linux. For Debian-packaged and other glibc binaries; OpenGL via zink (bring your own glibc Mesa), OpenCL via clvk."
+  },
+  "roots": ["mesa-vulkan-icd-freedreno-glibc", "vulkan-icd-loader-glibc", "vulkan-tools-glibc", "vulkan-headers-glibc"],
+  "bin": ["lgpu-run", "lgpu-info", "lgpu-cc"],
+  "selftest": "lgpu-info",
+  "needs": { "shizuku": false, "display": false, "gpu": true },
+  "license": "MIT",
+  "homepage": "https://mesa3d.org",
+  "maintainers": ["greyoak111"],
+  "files": {
+    "usr/bin/lgpu-run": { "src": "bin/lgpu-run", "mode": "755" },
+    "usr/bin/lgpu-info": { "src": "bin/lgpu-info", "mode": "755" },
+    "usr/bin/lgpu-cc": { "src": "bin/lgpu-cc", "mode": "755" },
+    "usr/share/cccodroid/components/gpu-driver-glibc/lib/fetch-glibc-toolchain.py": { "src": "lib/fetch-glibc-toolchain.py", "mode": "644" }
+  },
+  "notes": "包来自 Termux 官方仓库的 glibc 仓库（termux-glibc），装到 $PREFIX/glibc/ 下。kind=glibc：给 glibc 程序用的组件（v1 的 kind 白名单里还没放行，需要 devkit.mjs 支持）。"
+}

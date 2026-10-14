@@ -4,14 +4,22 @@
 开源驱动 Turnip（Vulkan 1.4）+ Mesa zink（OpenGL/GLES）+ 厂商 OpenCL，
 全部进程级生效：不改系统分区、不装模块、不需要 root。
 
+两套，各管一类程序：
+
+| | 给谁用 | 入口 | 本机实测 |
+|---|---|---|---|
+| **bionic 侧**（Termux 那套） | `$PREFIX/bin` 里的 CLI 程序 | `gpu-run` / `gpu-info` | Turnip **Vulkan 1.4.354** · zink GL · 厂商 OpenCL 3.0 |
+| **glibc 侧**（Linux arm64） | Debian 包、glibc 二进制（Blender 之类） | `lgpu-run` / `lgpu-info` / `lgpu-cc` | Turnip **Vulkan 1.3.289** · 本机直接编 glibc 程序 |
+
 ```
-你的程序 → gpu-run → Turnip（Vulkan 1.4）→ /dev/kgsl-3d0 → Adreno
-                    └ zink（GL→Vulkan 转译）→ 同上
-                    └ 厂商 OpenCL（libOpenCL.so）→ 同上
+你的程序 → gpu-run / lgpu-run → Turnip（Vulkan）→ /dev/kgsl-3d0 → Adreno
+                              └ zink（GL→Vulkan 转译）→ 同上
+                              └ 厂商 OpenCL（bionic）/ clvk（glibc）→ 同上
 ```
 
 这是 cccodroid 组件市场里 [`gpu-driver`](recipe/recipe.json) 组件的上游仓库：
-应用里一键装的就是这里的脚本，本仓库额外提供完整版（HAL 通道、`gpu-switch`）和调研文档。
+应用里一键装的就是这里的脚本，本仓库额外提供完整版（HAL 通道、`gpu-switch`）、
+glibc 侧组件（[`glibc/`](glibc/)）和调研文档。
 
 ## 实测（Lenovo TB320FC / Legion Y700 2023）
 
@@ -82,6 +90,45 @@ gpu-run --vendor <程序>                      # 什么都不注入
 
 细节见 [skill/SKILL.md](skill/SKILL.md) —— 那份也会作为 Claude 的 skill 装到设备上。
 
+## glibc / Linux arm64 侧
+
+给 **glibc 程序**（Debian 包、glibc 构建的二进制）用。包取自
+[Termux 官方 glibc 仓库](https://packages.termux.dev)（`termux-glibc`），装到 `$PREFIX/glibc/` 下：
+
+```sh
+lgpu-info                                   # 自检
+lgpu-run vulkaninfo --summary               # glibc 侧的 Vulkan 驱动
+lgpu-run ./你的程序                          # 用 Turnip 跑
+lgpu-run -z ./GL程序 -L <debroot 的库目录>    # OpenGL 走 zink（需要 glibc 版 Mesa）
+lgpu-cc hello.c -o hello                    # 在本机编 glibc 程序（C++ 自动换 clang++）
+```
+
+本机实测（TB320FC）：
+
+```
+$ lgpu-info
+===== Turnip（glibc 侧）=====
+GPU0: deviceName = Turnip Adreno (TM) 725   apiVersion = 1.3.289
+      driverInfo = Mesa 24.2.6.termux-glibc-0
+
+$ lgpu-cc vkglibc.c -O2 -o vkglibc -lvulkan && lgpu-run ./vkglibc
+GPU0  Turnip Adreno (TM) 725
+      api=1.3.289  vendor=0x5143 device=0x7030002  集成 GPU
+```
+
+两个只有 glibc 侧才会碰到的坑（都已写进脚本 / SKILL.md）：
+
+- **必须摘掉 bionic 的 `LD_PRELOAD`**（cccodroid 的 shell 挂着 termux-exec 垫片）：glibc 的
+  ld.so 会跨 libc 继承它，然后报 `.../glibc/lib/libc.so: invalid ELF header` —— 像是 glibc 坏了，
+  其实只是这个垫片。`lgpu-run` 自动处理。
+- **库路径不能掺 bionic**（`$PREFIX/lib` 是 bionic 的，符号版本 `LIBC`/`LIBC_N`）——
+  掺进去会满屏 `version 'LIBC' not found`。要加库用 `-L` 显式加。
+
+**在本机编 glibc 程序**：本机 clang 是 bionic 的，交叉到 glibc 只差 GCC 运行时的
+`crtbegin*`/`crtend*`/`libgcc.a`/`libgcc_eh.a`（就是 libgcc-14-dev 的那几件）。
+`lgpu-cc --setup` 从 Termux 官方仓库的 `gcc-glibc` 包里只挑那几百 KB（核对 SHA256），
+头文件/库/链接脚本用 base 里已有的 `glibc` 包 —— 于是 `lgpu-cc` 一行就能编。
+
 ## 支持矩阵与边界
 
 | 代际 | Turnip | 说明 |
@@ -101,13 +148,16 @@ gpu-run --vendor <程序>                      # 什么都不注入
 ## 目录
 
 ```
-bin/gpu-run  bin/gpu-info  bin/gpu-switch   # 入口（市场配方用同一份 gpu-run / gpu-info）
+bin/gpu-run  bin/gpu-info  bin/gpu-switch   # bionic 侧入口（市场配方用同一份 gpu-run / gpu-info）
 lib/probe.py                                # 自检探针（ctypes，无额外依赖）
 lib/fetch_turnip.py                         # 从 Termux 官方仓库取 Turnip ICD
 src/gpu_bootstrap.cpp                       # 通道 B 的 LD_PRELOAD 垫片源码
 install.sh                                  # 完整版安装器（幂等）
 recipe/                                     # cccodroid 组件市场配方 + 同步脚本
 skill/SKILL.md                              # 给 Claude 的用法说明
+glibc/                                      # glibc 侧：lgpu-run / lgpu-info / lgpu-cc + 配方
+  bin/ lib/fetch-glibc-toolchain.py         #   └ 补齐 crt/libgcc，使本机 clang 能编 glibc 程序
+.github/workflows/build-clvk.yml            # CI 编 clvk（glibc 版 OpenCL），产物带 sha256
 docs/                                       # 调研与实践记录（见下）
 ```
 
@@ -122,10 +172,13 @@ docs/                                       # 调研与实践记录（见下）
 
 ## 路线图
 
-- [x] 两条 Turnip 通道 + zink + 厂商 OpenCL，真机验证
-- [x] 组件市场上架配方（`gpu-driver`）
-- [ ] glibc（Linux arm64）侧的同款组件：Debian/Termux-glibc 依赖闭包 + `lgpu-run`
-- [ ] clvk 的 glibc 版（OpenCL over Vulkan），需要先补齐 glibc 工具链的 libgcc/crt 那几块料
+- [x] bionic 侧：两条 Turnip 通道 + zink + 厂商 OpenCL，真机验证
+- [x] 组件市场上架配方（`gpu-driver`，PR 已开）
+- [x] glibc 侧：Turnip + `lgpu-run`/`lgpu-info`，真机验证
+- [x] 本机编 glibc 程序（补上 libgcc/crt 那几件，`lgpu-cc` 一行搞定）
+- [ ] clvk 的 glibc 版（OpenCL over Vulkan）：CI 构建（`.github/workflows/build-clvk.yml`），
+      设备上不编 —— clspv + LLVM + libclc 在 8 核手机上是小时级
+- [ ] 往 cccodroid 主仓库 PR：组件市场放行 `kind: glibc`（`devkit.mjs` 一行白名单）
 
 ## 许可证与鸣谢
 
