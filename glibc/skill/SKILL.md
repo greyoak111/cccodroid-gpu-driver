@@ -48,6 +48,21 @@ lgpu-run ./hello                    # 要 GPU 就套 lgpu-run
   `$PREFIX/glibc/lib/ld-linux-aarch64.so.1`。
 - 默认 `TU_DEBUG=sysmem`（关 tiling，a7xx/a8xx 更稳）；要改用 `CCODROID_TU_DEBUG=`。
 
+## OpenCL（clvk）
+
+glibc 侧用不了厂商的 OpenCL（那是 bionic 库），要用 **clvk**（OpenCL over Vulkan → Turnip）。
+clvk 由本仓库 CI 编译（clspv + LLVM + libclc 在手机上是小时级），产物放 Release：
+
+```sh
+./install-clvk.sh                    # 取 libOpenCL.so + clspv，核对 SHA256，装进 $PREFIX/glibc
+./install-clvk.sh --dry-run          # 先看它要做什么
+lgpu-cc lib/clprobe.c -o clprobe -lOpenCL && lgpu-run ./clprobe   # 自测：枚举 + 向量加 kernel
+```
+
+装好后 `$PREFIX/glibc/lib/libOpenCL.so` 即 OpenCL 实现（`-lOpenCL` 直接链得上），
+`$PREFIX/glibc/bin/clspv` 可离线把 OpenCL C 编成 SPIR-V。clspv 也已内嵌在库里，
+`clCreateProgramWithSource` 直接就能编译 kernel。
+
 ## 坑
 
 - **`LD_PRELOAD` 必须摘掉**：cccodroid 的 shell 给每个进程挂了 bionic 的 termux-exec 垫片，

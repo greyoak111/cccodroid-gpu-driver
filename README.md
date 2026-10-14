@@ -101,6 +101,8 @@ lgpu-run vulkaninfo --summary               # glibc 侧的 Vulkan 驱动
 lgpu-run ./你的程序                          # 用 Turnip 跑
 lgpu-run -z ./GL程序 -L <debroot 的库目录>    # OpenGL 走 zink（需要 glibc 版 Mesa）
 lgpu-cc hello.c -o hello                    # 在本机编 glibc 程序（C++ 自动换 clang++）
+./glibc/install-clvk.sh                     # 可选：装 clvk（glibc 侧 OpenCL，从 Release 取并核对 SHA256）
+lgpu-cc glibc/lib/clprobe.c -o clprobe -lOpenCL && lgpu-run ./clprobe   # 装完自测
 ```
 
 本机实测（TB320FC）：
@@ -128,6 +130,11 @@ GPU0  Turnip Adreno (TM) 725
 `crtbegin*`/`crtend*`/`libgcc.a`/`libgcc_eh.a`（就是 libgcc-14-dev 的那几件）。
 `lgpu-cc --setup` 从 Termux 官方仓库的 `gcc-glibc` 包里只挑那几百 KB（核对 SHA256），
 头文件/库/链接脚本用 base 里已有的 `glibc` 包 —— 于是 `lgpu-cc` 一行就能编。
+
+**glibc 侧 OpenCL 走 clvk**（OpenCL C → SPIR-V → Vulkan → Turnip）：厂商的 `libOpenCL.so`
+是 bionic 库，glibc 进程加载不了。clvk 要 clspv + 整套 LLVM + libclc，手机上是小时级，
+所以交给 CI 编（[.github/workflows/build-clvk.yml](.github/workflows/build-clvk.yml)），
+产物放 Release，`glibc/install-clvk.sh` 取下来核对 SHA256 再装进 `$PREFIX/glibc/`。
 
 ## 支持矩阵与边界
 
@@ -157,6 +164,7 @@ recipe/                                     # cccodroid 组件市场配方 + 同
 skill/SKILL.md                              # 给 Claude 的用法说明
 glibc/                                      # glibc 侧：lgpu-run / lgpu-info / lgpu-cc + 配方
   bin/ lib/fetch-glibc-toolchain.py         #   └ 补齐 crt/libgcc，使本机 clang 能编 glibc 程序
+  install-clvk.sh  lib/clprobe.c            #   └ 装 clvk（CI 编的 Release）+ OpenCL 自测程序
 .github/workflows/build-clvk.yml            # CI 编 clvk（glibc 版 OpenCL），产物带 sha256
 docs/                                       # 调研与实践记录（见下）
 ```
@@ -176,8 +184,9 @@ docs/                                       # 调研与实践记录（见下）
 - [x] 组件市场上架配方（`gpu-driver`，PR 已开）
 - [x] glibc 侧：Turnip + `lgpu-run`/`lgpu-info`，真机验证
 - [x] 本机编 glibc 程序（补上 libgcc/crt 那几件，`lgpu-cc` 一行搞定）
-- [ ] clvk 的 glibc 版（OpenCL over Vulkan）：CI 构建（`.github/workflows/build-clvk.yml`），
-      设备上不编 —— clspv + LLVM + libclc 在 8 核手机上是小时级
+- [ ] glibc 侧 OpenCL：clvk（OpenCL over Vulkan）—— CI 构建（`.github/workflows/build-clvk.yml`），
+      `glibc/install-clvk.sh` 一键装，`glibc/lib/clprobe.c` 自测（构建中，真机验证后打勾）。
+      设备上不编：clspv + LLVM + libclc 在 8 核手机上是小时级
 - [ ] 往 cccodroid 主仓库 PR：组件市场放行 `kind: glibc`（`devkit.mjs` 一行白名单）
 
 ## 许可证与鸣谢
