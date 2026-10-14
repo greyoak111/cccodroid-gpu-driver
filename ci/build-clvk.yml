@@ -1,0 +1,101 @@
+# 给 glibc（Linux arm64）编 clvk —— OpenCL 跑在 Vulkan 上，安卓上唯一能用的 GLIBC 侧 OpenCL。
+#
+# 为什么在 CI 编而不是设备上编：clvk 默认把 clspv（OpenCL C → SPIR-V）**内嵌**进 libOpenCL.so，
+# clspv 又要整套 LLVM + clang 前端 + libclc。设备上（8 核、无 sccache）是小时级，
+# 而且中途没电/切后台就前功尽弃。CI 上跑一次，产物按 sha256 固定下来。
+#
+# 配方来源：clvk 自己的 presubmit.yml + Termux 的 packages/clvk/build.sh（两处都复用）。
+# 产物：libOpenCL.so（自包含，内嵌 clspv+libclc）、clspv（独立命令行，给离线编译用）。
+name: build-clvk
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["clvk-*"]
+
+permissions:
+  contents: write
+
+jobs:
+  clvk:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 350
+    steps:
+      - name: 腾地方（LLVM 构建很吃盘）
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost \
+                      /usr/local/lib/node_modules /usr/share/swift
+          sudo apt-get clean
+          df -h /
+
+      - name: 取 clvk 源码（含子模块）
+        run: |
+          git clone --depth 1 https://github.com/kpet/clvk.git src
+          cd src
+          git submodule update --init --recursive --depth 1
+
+      - name: 取 LLVM 源码（浅克隆，clspv 要用）
+        run: cd src && python3 ./external/clspv/utils/fetch_sources.py --deps llvm --shallow
+
+      - name: 装构建工具
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build cmake libvulkan-dev
+
+      - name: 编 libclc（OpenCL 内建函数，spirv32/64）
+        run: |
+          set -x
+          L=src/external/clspv/third_party/llvm/llvm
+          cmake -S "$L" -B build_libclc -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DLLVM_ENABLE_PROJECTS=clang \
+            -DLLVM_TARGETS_TO_BUILD=AArch64 \
+            -DLLVM_INCLUDE_TESTS=OFF -DLLVM_INCLUDE_EXAMPLES=OFF -DLLVM_INCLUDE_BENCHMARKS=OFF \
+            -DRUNTIMES_spirv32-unknown-vulkan_LLVM_ENABLE_RUNTIMES=libclc \
+            -DRUNTIMES_spirv64-unknown-vulkan_LLVM_ENABLE_RUNTIMES=libclc \
+            -DLLVM_RUNTIME_TARGETS="spirv32-unknown-vulkan;spirv64-unknown-vulkan"
+          cmake --build build_libclc --target libclc -j "$(nproc)"
+          mkdir -p libclc/spirv32-unknown-vulkan libclc/spirv64-unknown-vulkan
+          cp "$(find build_libclc -name libclc.bc | grep spirv32 | head -1)" libclc/spirv32-unknown-vulkan/
+          cp "$(find build_libclc -name libclc.bc | grep spirv64 | head -1)" libclc/spirv64-unknown-vulkan/
+          rm -rf build_libclc
+
+      - name: 配置（在线编译器：clspv 内嵌进 libOpenCL.so）
+        run: |
+          cmake -S src -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCLVK_CLSPV_ONLINE_COMPILER=ON \
+            -DCLVK_BUILD_TESTS=OFF \
+            -DCLVK_VULKAN_IMPLEMENTATION=system \
+            -DCLSPV_EXTERNAL_LIBCLC_DIR="$PWD/libclc" \
+            -DLLVM_INCLUDE_TESTS=OFF -DLLVM_INCLUDE_EXAMPLES=OFF -DLLVM_INCLUDE_BENCHMARKS=OFF \
+            -DLLVM_INCLUDE_UTILS=OFF -DLLVM_BUILD_UTILS=OFF \
+            -DLLVM_ENABLE_ASSERTIONS=OFF -DLLVM_TARGETS_TO_BUILD=AArch64
+
+      - name: 编 clvk（OpenCL 库）与 clspv（命令行）
+        run: |
+          set -x
+          cmake --build build --parallel "$(nproc)" --target OpenCL clspv
+          mkdir -p out
+          install -Dm755 "$(find build -maxdepth 2 -name libOpenCL.so | head -1)" out/libOpenCL.so
+          install -Dm755 "$(find build -maxdepth 4 -type f -name clspv -perm -u+x | head -1)" out/clspv
+          ls -la out/
+          file out/libOpenCL.so out/clspv
+          sha256sum out/* | tee out/SHA256SUMS
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: clvk-glibc-aarch64
+          path: out/
+          if-no-files-found: error
+
+      - name: 发布（打 tag 时）
+        if: startsWith(github.ref, 'refs/tags/clvk-')
+        run: |
+          gh release create "$GITHUB_REF_NAME" out/libOpenCL.so out/clspv out/SHA256SUMS \
+            --title "clvk (glibc / Linux arm64) $GITHUB_REF_NAME" \
+            --notes "clvk（OpenCL over Vulkan）的 glibc 版，给 Android 上的 Linux arm64 程序用。
+          自包含：clspv + libclc 都内嵌在 libOpenCL.so 里，运行时只需要一个 Vulkan 实现（例如 Turnip）。"
+        env:
+          GH_TOKEN: ${{ github.token }}
