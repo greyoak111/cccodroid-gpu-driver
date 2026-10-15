@@ -15,7 +15,7 @@
 set -e
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-REPO="greyoak111/cccodroid-gpu-driver"
+REPO="greyoak111/cccodroid-gpu-driver-snapdragon"
 PREFIX="${CCODROID_PREFIX:-${PREFIX:-}}"
 [ -n "$PREFIX" ] || { echo "PREFIX 未设置（本环境由 App 提供）" >&2; exit 1; }
 GROOT="${CCODROID_GLIBC_ROOT:-$PREFIX/glibc}"

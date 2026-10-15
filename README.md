@@ -1,4 +1,4 @@
-# cccodroid-gpu-driver
+# cccodroid-gpu-driver-snapdragon
 
 **免 root，让 Android 上的命令行程序直接用上高通 Adreno GPU。**
 开源驱动 Turnip（Vulkan 1.4）+ Mesa zink（OpenGL/GLES）+ 厂商 OpenCL，
@@ -194,7 +194,7 @@ docs/                                       # 调研与实践记录（见下）
 - [x] glibc 侧：Turnip + `lgpu-run`/`lgpu-info`，真机验证
 - [x] 本机编 glibc 程序（补上 libgcc/crt 那几件，`lgpu-cc` 一行搞定）
 - [x] glibc 侧 OpenCL：clvk（OpenCL over Vulkan）—— [CI 构建](.github/workflows/build-clvk.yml) +
-      [Release `clvk-2026.10.15`](https://github.com/greyoak111/cccodroid-gpu-driver/releases/tag/clvk-2026.10.15)，
+      [Release `clvk-2026.10.15`](https://github.com/greyoak111/cccodroid-gpu-driver-snapdragon/releases/tag/clvk-2026.10.15)，
       `glibc/install-clvk.sh` 一键装，真机验证：平台 `clvk` / OpenCL 3.0 / Turnip Adreno 725 /
       kernel 编译 + 向量加 PASS。设备上不编：clspv + LLVM + libclc 在 8 核手机上是小时级
 - [ ] 组件市场那边：放行 `kind: glibc` + 配方支持 `fetch`（仓库外的上游构件、按 sha256 固定）——
