@@ -136,6 +136,15 @@ GPU0  Turnip Adreno (TM) 725
 所以交给 CI 编（[.github/workflows/build-clvk.yml](.github/workflows/build-clvk.yml)），
 产物放 Release，`glibc/install-clvk.sh` 取下来核对 SHA256 再装进 `$PREFIX/glibc/`。
 
+真机上跑起来是这样（`clvk-info` 就是这套自检，装组件后直接跑）：
+
+```
+平台: clvk   版本: OpenCL 3.0 clvk
+设备: Turnip Adreno (TM) 725   OpenCL 3.0 CLVK on Vulkan v1.3.289 driver 100671494
+kernel 编译 OK（说明 clspv 在里面干活）
+向量加: PASS（0/4096 个不对）
+```
+
 ## 支持矩阵与边界
 
 | 代际 | Turnip | 说明 |
@@ -184,10 +193,12 @@ docs/                                       # 调研与实践记录（见下）
 - [x] 组件市场上架配方（`gpu-driver`，PR 已开）
 - [x] glibc 侧：Turnip + `lgpu-run`/`lgpu-info`，真机验证
 - [x] 本机编 glibc 程序（补上 libgcc/crt 那几件，`lgpu-cc` 一行搞定）
-- [ ] glibc 侧 OpenCL：clvk（OpenCL over Vulkan）—— CI 构建（`.github/workflows/build-clvk.yml`），
-      `glibc/install-clvk.sh` 一键装，`glibc/lib/clprobe.c` 自测（构建中，真机验证后打勾）。
-      设备上不编：clspv + LLVM + libclc 在 8 核手机上是小时级
-- [ ] 往 cccodroid 主仓库 PR：组件市场放行 `kind: glibc`（`devkit.mjs` 一行白名单）
+- [x] glibc 侧 OpenCL：clvk（OpenCL over Vulkan）—— [CI 构建](.github/workflows/build-clvk.yml) +
+      [Release `clvk-2026.10.15`](https://github.com/greyoak111/cccodroid-gpu-driver/releases/tag/clvk-2026.10.15)，
+      `glibc/install-clvk.sh` 一键装，真机验证：平台 `clvk` / OpenCL 3.0 / Turnip Adreno 725 /
+      kernel 编译 + 向量加 PASS。设备上不编：clspv + LLVM + libclc 在 8 核手机上是小时级
+- [ ] 组件市场那边：放行 `kind: glibc` + 配方支持 `fetch`（仓库外的上游构件、按 sha256 固定）——
+      PR 已开，合入后 `gpu-driver-glibc` 与 `clvk-glibc` 两个配方就跟着上架
 
 ## 许可证与鸣谢
 

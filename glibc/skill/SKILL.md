@@ -56,8 +56,11 @@ clvk 由本仓库 CI 编译（clspv + LLVM + libclc 在手机上是小时级）�
 ```sh
 ./install-clvk.sh                    # 取 libOpenCL.so + clspv，核对 SHA256，装进 $PREFIX/glibc
 ./install-clvk.sh --dry-run          # 先看它要做什么
-lgpu-cc lib/clprobe.c -o clprobe -lOpenCL && lgpu-run ./clprobe   # 自测：枚举 + 向量加 kernel
+lgpu-cc lib/clprobe.c -o clprobe && lgpu-run ./clprobe   # 自测：枚举平台/设备 + 真跑一个向量加 kernel
 ```
+
+本机实测（TB320FC / Adreno 730）：平台 `clvk` / OpenCL 3.0 / 设备 `Turnip Adreno (TM) 725` /
+kernel 编译 OK / 向量加 PASS。装进 cccodroid 后市场里的组件名是 `clvk-glibc`，入口命令 `clvk-info`。
 
 装好后 `$PREFIX/glibc/lib/libOpenCL.so` 即 OpenCL 实现（`-lOpenCL` 直接链得上），
 `$PREFIX/glibc/bin/clspv` 可离线把 OpenCL C 编成 SPIR-V。clspv 也已内嵌在库里，
