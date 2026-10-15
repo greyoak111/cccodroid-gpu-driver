@@ -5,13 +5,13 @@
   "revision": 1,
   "name": { "zh": "GPU 驱动（glibc / Linux arm64）", "en": "GPU driver (glibc / Linux arm64)" },
   "desc": {
-    "zh": "让 glibc（Linux arm64）程序用上本机 Adreno GPU：glibc 侧的 Turnip Vulkan 1.4 + 命令行包装器 lgpu-run（拼对 glibc 运行时与 ICD，经 ld-linux 启动）。给 Debian 包、Blender 这类 glibc 程序用；OpenGL 走 zink（需自备 glibc 版 Mesa），OpenCL 走 clvk。",
-    "en": "Puts the on-device Adreno GPU to work from glibc (Linux arm64) programs: a glibc-side Turnip Vulkan 1.4 plus the lgpu-run wrapper, which wires up the glibc runtime, the ICD and launches through ld-linux. For Debian-packaged and other glibc binaries; OpenGL via zink (bring your own glibc Mesa), OpenCL via clvk."
+    "zh": "让 glibc（Linux arm64）程序用上本机 Adreno GPU：glibc 侧的 Turnip（Vulkan 1.3，termux-glibc 仓库的 Mesa 24.2）+ 命令行包装器 lgpu-run（拼对 glibc 运行时与 ICD，经 ld-linux 启动）。给 Debian 包、Blender 这类 glibc 程序用；OpenGL 走 zink（需自备 glibc 版 Mesa），OpenCL 走 clvk。",
+    "en": "Puts the on-device Adreno GPU to work from glibc (Linux arm64) programs: a glibc-side Turnip (Vulkan 1.3, Mesa 24.2 from the termux-glibc repo) plus the lgpu-run wrapper, which wires up the glibc runtime, the ICD and launches through ld-linux. For Debian-packaged and other glibc binaries; OpenGL via zink (bring your own glibc Mesa), OpenCL via clvk."
   },
   "roots": ["mesa-vulkan-icd-freedreno-glibc", "vulkan-icd-loader-glibc", "vulkan-tools-glibc", "vulkan-headers-glibc"],
   "bin": ["lgpu-run", "lgpu-info", "lgpu-cc"],
   "selftest": "lgpu-info",
-  "needs": { "shizuku": false, "display": false, "gpu": true },
+  "needs": { "shizuku": false, "display": false, "gpu": "adreno" },
   "license": "MIT",
   "homepage": "https://mesa3d.org",
   "maintainers": ["greyoak111"],

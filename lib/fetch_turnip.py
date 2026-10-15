@@ -21,8 +21,9 @@ BASES = [
 
 
 def fetch(url, timeout=120):
-    # 部分 Termux 镜像证书链有问题，只对拉包用 -k
-    out = subprocess.run(["curl", "-sSL", "-k", "--max-time", str(timeout), url],
+    # 别加 -k：这里拉的是要装进进程里的驱动库，而且没有别的校验，全靠 TLS。
+    # 某个镜像证书有问题时它会失败（CalledProcessError），main() 里自然换下一个镜像
+    out = subprocess.run(["curl", "-fsSL", "--max-time", str(timeout), url],
                          capture_output=True, check=True)
     return out.stdout
 

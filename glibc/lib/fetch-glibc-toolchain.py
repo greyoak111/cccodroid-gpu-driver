@@ -34,7 +34,8 @@ WANT_FILES = {"crtbegin.o", "crtbeginS.o", "crtbeginT.o", "crtend.o", "crtendS.o
 
 
 def curl(url, timeout=600):
-    out = subprocess.run(["curl", "-sSL", "-k", "--max-time", str(timeout), url],
+    # 别加 -k：索引（Packages.gz）也是从这条连接取的，证书不校验，下面「核对 SHA256」就形同虚设
+    out = subprocess.run(["curl", "-fsSL", "--max-time", str(timeout), url],
                          capture_output=True, check=True)
     return out.stdout
 

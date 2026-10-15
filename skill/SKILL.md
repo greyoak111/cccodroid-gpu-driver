@@ -26,6 +26,8 @@ gpu-run --vendor <程序>                   # 不注入任何东西，用系统�
 ```
 
 - `gpu-run -h` 有全部选项。`--` 之后的参数原样传给程序。
+- **组件只带驱动和 `vulkaninfo`**（vulkan-tools）。上面的 vkmark、glmark2、clinfo、llama.cpp 都要自备 ——
+  cccodroid 没有 pkg/apt，通常是用工具包里的 clang/cmake 自己编。没有的程序先跟用户说清楚，别假装能跑。
 - 默认设 `TU_DEBUG=sysmem`（关 tiling，a7xx/a8xx 更稳）；要调：`CCODROID_TU_DEBUG=…`，
   设成空串则不设。
 - zink 的着色器缓存写在 `~/.cccodroid/gpu-driver/cache/shader`（首次渲染慢、之后快；删掉即清）。

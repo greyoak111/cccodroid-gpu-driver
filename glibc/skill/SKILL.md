@@ -1,6 +1,6 @@
 ---
 name: gpu-driver-glibc
-description: 让 glibc（Linux arm64）程序用上本机 Adreno GPU：Turnip Vulkan 1.4（glibc 侧）+ 可选 zink。用户要跑 Debian/glibc 的 Vulkan 或 OpenGL 程序（Blender 之类）、或问 glibc 程序能不能用 GPU 时使用。
+description: 让 glibc（Linux arm64）程序用上本机 Adreno GPU：Turnip（glibc 侧，Vulkan 1.3）+ 可选 zink。用户要跑 Debian/glibc 的 Vulkan 或 OpenGL 程序（Blender 之类）、或问 glibc 程序能不能用 GPU 时使用。
 ---
 
 # GPU（glibc 侧）
@@ -51,20 +51,24 @@ lgpu-run ./hello                    # 要 GPU 就套 lgpu-run
 ## OpenCL（clvk）
 
 glibc 侧用不了厂商的 OpenCL（那是 bionic 库），要用 **clvk**（OpenCL over Vulkan → Turnip）。
-clvk 由本仓库 CI 编译（clspv + LLVM + libclc 在手机上是小时级），产物放 Release：
+clvk 在 CI 上编（clspv + LLVM + libclc 在手机上是小时级）。怎么装看你是哪种安装：
 
-```sh
-./install-clvk.sh                    # 取 libOpenCL.so + clspv，核对 SHA256，装进 $PREFIX/glibc
-./install-clvk.sh --dry-run          # 先看它要做什么
-lgpu-cc lib/clprobe.c -o clprobe && lgpu-run ./clprobe   # 自测：枚举平台/设备 + 真跑一个向量加 kernel
-```
+- **从 cccodroid「扩展」页装的**（市场组件）：再装 **`clvk-glibc`**（OpenCL 组件），自测用它带的 `clvk-info`。
+  市场组件里没有下面的 `install-clvk.sh`，两种装法也别混用。
+- **手动版**（本仓库 `install.sh` 装的），在本仓库目录下：
+
+  ```sh
+  glibc/install-clvk.sh                # 取 libOpenCL.so + clspv，核对 SHA256，装进 $PREFIX/glibc
+  glibc/install-clvk.sh --dry-run      # 先看它要做什么
+  lgpu-cc glibc/lib/clprobe.c -o clprobe && lgpu-run ./clprobe   # 自测：枚举平台/设备 + 真跑一个向量加 kernel
+  ```
 
 本机实测（TB320FC / Adreno 730）：平台 `clvk` / OpenCL 3.0 / 设备 `Turnip Adreno (TM) 725` /
-kernel 编译 OK / 向量加 PASS。装进 cccodroid 后市场里的组件名是 `clvk-glibc`，入口命令 `clvk-info`。
+kernel 编译 OK / 向量加 PASS。
 
-装好后 `$PREFIX/glibc/lib/libOpenCL.so` 即 OpenCL 实现（`-lOpenCL` 直接链得上），
-`$PREFIX/glibc/bin/clspv` 可离线把 OpenCL C 编成 SPIR-V。clspv 也已内嵌在库里，
-`clCreateProgramWithSource` 直接就能编译 kernel。
+装好后 `$PREFIX/glibc/lib/libOpenCL.so` 即 OpenCL 实现（`-lOpenCL` 直接链得上）；clspv 内嵌在库里，
+`clCreateProgramWithSource` 直接就能编译 kernel。手动版另有 `$PREFIX/glibc/bin/clspv` 可离线把
+OpenCL C 编成 SPIR-V（市场组件不带）。
 
 ## 坑
 
@@ -88,3 +92,4 @@ kernel 编译 OK / 向量加 PASS。装进 cccodroid 后市场里的组件名是
 
 - 装/删 glibc Mesa、往 `$PREFIX/glibc` 外写东西：先问。lgpu-run 只往
   `~/.cccodroid/gpu-driver/` 写缓存与修补过的 ICD json。
+- `lgpu-cc` 第一次用要从 Termux 官方仓库下载约 84MB（核对 SHA256 后只留几百 KB）：先跟用户说一声。

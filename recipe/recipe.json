@@ -11,7 +11,7 @@
   "roots": ["mesa-vulkan-icd-freedreno", "mesa", "vulkan-tools"],
   "bin": ["gpu-run", "gpu-info"],
   "selftest": "gpu-info",
-  "needs": { "shizuku": false, "display": false, "gpu": true },
+  "needs": { "shizuku": false, "display": false, "gpu": "adreno" },
   "license": "MIT",
   "homepage": "https://mesa3d.org",
   "maintainers": ["greyoak111"],

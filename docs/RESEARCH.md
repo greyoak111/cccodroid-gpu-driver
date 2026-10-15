@@ -90,7 +90,8 @@ _get_function_addr: Missing function 'clIcdGetPlatformIDsKHR' in ICD, should be 
 - 系统 loader 不认 `VK_DRIVER_FILES`（实测无效），只认 GraphicsEnv 驱动目录
 - `$PREFIX` 自带 Mesa 26.2.4（swrast/zink/lavapipe/lvp ICD），但没有 turnip/freedreno 的 Vulkan ICD
 - `GraphicsEnv::setDriverPathAndSphalLibraries` 同一进程只生效一次（先设者赢）
-- 部分 Termux 镜像证书过期，拉包用 `curl -k`
+- 部分 Termux 镜像证书过期 —— **别用 `curl -k` 绕**（拉的是驱动库，关了证书校验等于谁都能塞一个进来），
+  证书不对就换下一个镜像（`lib/fetch_turnip.py` 已经这么做）
 
 ## 案例对标：Blender on Android（调研结果）
 
