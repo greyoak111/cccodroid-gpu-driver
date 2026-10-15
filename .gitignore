@@ -2,3 +2,4 @@
 payload/
 .sandbox/
 out/
+__pycache__/
