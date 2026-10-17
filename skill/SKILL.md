@@ -14,6 +14,35 @@ description: 让命令行程序用上本机 Adreno GPU（Turnip Vulkan 1.4 / Mes
 gpu-info            # GPU 型号 / 厂商驱动 / Turnip / zink / 渲染自测；退出码 0 = Turnip 可用
 ```
 
+## 运行链路
+
+`gpu-run` 不是驱动，是一层 bash 包装：它只设环境变量，然后 `exec` 你的程序。驱动由程序自己的加载器按这些变量去找。
+
+```
+gpu-run [-z] [--opencl] <程序>（bionic / Termux 侧的程序）
+  ├─ 默认   VK_DRIVER_FILES / VK_ICD_FILENAMES → 本组件的 Turnip ICD
+  │         程序 → $PREFIX/lib 里的 Vulkan 加载器 → Turnip（libvulkan_freedreno.so）
+  │         → /dev/kgsl-3d0 → Adreno
+  ├─ -z     再加 GALLIUM_DRIVER=zink：程序 → Mesa 的 EGL/GL（$PREFIX/lib/libgallium-*.so）
+  │         → zink（GL 转 Vulkan）→ 上面那条 Turnip 链
+  ├─ --opencl  把 /vendor/lib64/libOpenCL.so 拷进 ~/.cccodroid/gpu-driver/opencl/，
+  │            用 LD_LIBRARY_PATH 让程序先加载它 → 高通厂商 OpenCL 驱动
+  └─ --vendor  什么都不设 → 系统厂商驱动（Vulkan 1.1 / GLES）
+```
+
+| 这一环 | 由谁提供 | 在哪 |
+|---|---|---|
+| `gpu-run` / `gpu-info` | 本组件 | `$PREFIX/bin/` |
+| Turnip（Vulkan 驱动）与 ICD | 本组件：Termux 官方包 `mesa-vulkan-icd-freedreno` | `$PREFIX/lib/libvulkan_freedreno.so`、`$PREFIX/share/vulkan/icd.d/freedreno_icd.aarch64.json` |
+| Mesa（EGL/GL + zink） | 本组件：Termux 官方包 `mesa` | `$PREFIX/lib/` |
+| `vulkaninfo` | 本组件：`vulkan-tools` | `$PREFIX/bin/` |
+| 厂商 OpenCL | 设备自带，`--opencl` 时现拷 | `~/.cccodroid/gpu-driver/opencl/` |
+| vkmark、glmark2、clinfo、llama.cpp 这类程序 | **不在本组件里**，要另装或自己编 | — |
+
+- 这些全是 **bionic（Termux 侧）** 的库，**只给 bionic 程序用**。glibc 程序（Debian 包、Blender、workerd）加载不了，要用 **gpu-driver-glibc** 组件。
+- 只有链了 `$PREFIX/lib` 里那个加载器的程序才认 `VK_DRIVER_FILES`；链了 `/system/lib64/libvulkan.so` 的程序会无视它、继续用厂商驱动。
+- **会悄悄降级的地方**：`-z` 时 zink 起不来，Mesa 会退回 llvmpipe（CPU）照样出图。判断方法：`gpu-run -z` 下 GL 渲染器名应以 `zink` 开头、括号里是 Turnip；是 `llvmpipe` 就是没走 GPU。Vulkan 默认路径不会降级，ICD 找不到会直接报错退出。
+
 ## 用法
 
 ```sh

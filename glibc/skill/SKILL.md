@@ -14,6 +14,35 @@ description: 让 glibc（Linux arm64）程序用上本机 Adreno GPU：Turnip（
 lgpu-info          # GPU / glibc 运行时 / Turnip / Mesa(zink) / clvk；退出码 0 = Turnip 可用
 ```
 
+## 运行链路
+
+```
+lgpu-run [-z] [-L 目录] <glibc 程序>（bash 包装）
+  ├─ 摘掉继承来的 LD_PRELOAD（cccodroid shell 挂的 bionic termux-exec 垫片）
+  ├─ VK_ICD_FILENAMES / VK_DRIVER_FILES → glibc 侧 Turnip 的 ICD
+  │     （ICD 里的 library_path 打不开时，改写一份到 ~/.cccodroid/gpu-driver/icd/）
+  ├─ -z：GALLIUM_DRIVER=zink、EGL_PLATFORM=surfaceless、__EGL_VENDOR_LIBRARY_FILENAMES
+  ├─ TU_DEBUG=sysmem（默认）
+  └─ $PREFIX/glibc/lib/ld-linux-aarch64.so.1 --library-path <$PREFIX/glibc/lib[:-L 给的目录]> <程序>
+       └─ 程序 → libvulkan.so.1（glibc 侧 Vulkan 加载器）→ Turnip（libvulkan_freedreno.so）
+                → /dev/kgsl-3d0 → Adreno
+          -z 时：程序 → Mesa 的 EGL/GL（**你自己提供**）→ zink → 上面那条 Vulkan 链
+```
+
+| 这一环 | 由谁提供 | 在哪 |
+|---|---|---|
+| `lgpu-run` / `lgpu-info` / `lgpu-cc` | 本组件 | `$PREFIX/bin/` |
+| glibc 运行时与 `ld-linux` | 底座的 glibc | `$PREFIX/glibc/lib/` |
+| Turnip 与 ICD | 本组件：termux-glibc 仓库的 `mesa-vulkan-icd-freedreno-glibc` | `$PREFIX/glibc/lib/libvulkan_freedreno.so`、`$PREFIX/glibc/share/vulkan/icd.d/freedreno_icd.aarch64.json` |
+| Vulkan 加载器、`vulkaninfo`、头文件 | 本组件：`vulkan-icd-loader-glibc` / `vulkan-tools-glibc` / `vulkan-headers-glibc` | `$PREFIX/glibc/` |
+| glibc 版 Mesa（EGL/GL/zink） | **不在本组件里**；Blender 组件的 Debian 根里有一份 | 用 `-L` 指过去 |
+| OpenCL（clvk） | clvk-glibc 组件 | `$PREFIX/glibc/lib/libOpenCL.so` |
+
+- **别的 glibc 组件也靠这里的 Turnip**：Blender 的 EEVEE、clvk 都是。它们找不到 GPU 时，先查本组件装没装（`lgpu-info`）。
+- 这份 Turnip 是本机能走 KGSL 的那份。Debian 包里的 Turnip（`mesa-vulkan-drivers`）在本机枚举不到 GPU，别拿它替换。
+- 库路径只放 glibc 目录；`$PREFIX/lib` 是 bionic 的，混进来满屏 `version 'LIBC' not found`。
+- **会悄悄降级的地方**：`-z` 时 zink 起不来，Mesa 会退回 llvmpipe（CPU）。GL 渲染器名以 `zink` 开头才是走了 GPU。Vulkan 默认路径不降级：没有 Turnip 时 `vulkaninfo` 直接报错或只列出 llvmpipe。
+
 ## 用法
 
 ```sh
